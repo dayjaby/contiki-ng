@@ -73,6 +73,8 @@ input(void)
     LOG_INFO_("\n");
     current_callback(packetbuf_dataptr(), packetbuf_datalen(),
       packetbuf_addr(PACKETBUF_ADDR_SENDER), packetbuf_addr(PACKETBUF_ADDR_RECEIVER));
+  } else {
+    LOG_ERR("no callback set");
   }
 }
 /*--------------------------------------------------------------------*/

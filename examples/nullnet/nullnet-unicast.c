@@ -39,9 +39,13 @@
  */
 
 #include "contiki.h"
+
+#include "dev/leds.h"
+
 #include "net/netstack.h"
 #include "net/nullnet/nullnet.h"
 
+#include <random.h>
 #include <string.h>
 #include <stdio.h> /* For printf() */
 
@@ -52,7 +56,8 @@
 
 /* Configuration */
 #define SEND_INTERVAL (8 * CLOCK_SECOND)
-static linkaddr_t dest_addr =         {{ 0x01, 0x01, 0x01, 0x00, 0x01, 0x74, 0x12, 0x00 }};
+// static linkaddr_t dest_addr =         {{ 0x01, 0x01, 0x01, 0x00, 0x01, 0x74, 0x12, 0x00 }};
+static linkaddr_t dest_addr =         {{ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }};
 
 #if MAC_CONF_WITH_TSCH
 #include "net/mac/tsch/tsch.h"
@@ -73,13 +78,14 @@ void input_callback(const void *data, uint16_t len,
     LOG_INFO("Received %u from ", count);
     LOG_INFO_LLADDR(src);
     LOG_INFO_("\n");
+    leds_toggle(LEDS_RED);
   }
 }
 /*---------------------------------------------------------------------------*/
 PROCESS_THREAD(nullnet_example_process, ev, data)
 {
   static struct etimer periodic_timer;
-  static unsigned count = 0;
+  static unsigned rnd_number = 0;
 
   PROCESS_BEGIN();
 
@@ -88,15 +94,16 @@ PROCESS_THREAD(nullnet_example_process, ev, data)
 #endif /* MAC_CONF_WITH_TSCH */
 
   /* Initialize NullNet */
-  nullnet_buf = (uint8_t *)&count;
-  nullnet_len = sizeof(count);
+  nullnet_buf = (uint8_t *)&rnd_number;
+  nullnet_len = sizeof(rnd_number);
   nullnet_set_input_callback(input_callback);
 
   if(!linkaddr_cmp(&dest_addr, &linkaddr_node_addr)) {
     etimer_set(&periodic_timer, SEND_INTERVAL);
     while(1) {
+      rnd_number = random_rand() % 101;
       PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
-      LOG_INFO("Sending %u to ", count);
+      LOG_INFO("Sending %u to ", rnd_number);
       LOG_INFO_LLADDR(&dest_addr);
       LOG_INFO_("\n");
 

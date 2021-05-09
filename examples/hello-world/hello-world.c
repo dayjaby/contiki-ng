@@ -46,21 +46,28 @@ AUTOSTART_PROCESSES(&hello_world_process);
 /*---------------------------------------------------------------------------*/
 PROCESS_THREAD(hello_world_process, ev, data)
 {
-  static struct etimer timer;
 
   PROCESS_BEGIN();
 
-  /* Setup a periodic timer that expires after 10 seconds. */
-  etimer_set(&timer, CLOCK_SECOND * 10);
-
+  static struct etimer timer;
+  /* Setup a periodic timer that expires after 2 seconds. */
+  uint32_t interval = 2;
+  etimer_set(&timer, CLOCK_SECOND * interval);
   while(1) {
-    printf("Hello, world\n");
-
     /* Wait for the periodic timer to expire and then restart the timer. */
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-    etimer_reset(&timer);
+    PROCESS_WAIT_EVENT();
+    if(etimer_expired(&timer)) {
+      float seconds_passed = clock_time() / CLOCK_SECOND;
+      printf("%.8f seconds passed since start. David Jablonski\n", seconds_passed);
+      interval = timer.timer.interval * 2 / CLOCK_SECOND;
+      // appearently just writing interval *= 2 results in arbitrarily large intervals. Is 'interval' some kind of global variable? Why is interval not equal 2 here anymore after arriving here for the first time?
+
+      printf("The interval is %d seconds\n", interval);
+      etimer_reset_with_new_interval(&timer, CLOCK_SECOND * interval);
+    }
   }
 
   PROCESS_END();
 }
+
 /*---------------------------------------------------------------------------*/
