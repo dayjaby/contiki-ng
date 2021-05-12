@@ -244,6 +244,7 @@ enum {
   PACKETBUF_ATTR_FRAME_COUNTER_BYTES_0_1,
   PACKETBUF_ATTR_FRAME_COUNTER_BYTES_2_3,
 #endif /* LLSEC802154_USES_FRAME_COUNTER */
+  PACKETBUF_ATTR_NUM_REXMIT,
 
   /* Scope 2 attributes: used between end-to-end nodes. */
   /* These must be last */

@@ -37,6 +37,7 @@
  *         Oliver Harms <oha@informatik.uni-kiel.de>
  */
 
+#include "sys/rtimer.h"
 #include "net/mac/transparentmac/transparentmac.h"
 #include "net/mac/mac-sequence.h"
 #include "net/packetbuf.h"
@@ -50,7 +51,6 @@
 #define LOG_LEVEL LOG_LEVEL_MAC
 
 /* Constants of the IEEE 802.15.4 standard */
-//TODO: use macros below for exponential backoff
 
 /* macMinBE: Initial backoff exponent. Range 0--TMAC_MAX_BE */
 #ifdef TMAC_CONF_MIN_BE
@@ -66,6 +66,29 @@
 #define TMAC_MAX_BE 5
 #endif
 
+#define TMAC_SLOT_SIZE (RTIMER_ARCH_SECOND / 20)
+
+static rtimer_clock_t
+get_next_slot(uint8_t num_rexmit) {
+  rtimer_clock_t now = RTIMER_NOW();
+  if (num_rexmit > 0) {
+    // rexmit #1: 2^TMAC_MIN_BE slots
+    // rexmit #2: 2^(TMAC_MIN_BE+1) slots
+    // ...
+    // rexmit #n: 2^(TMAC_MAX_BE) slots
+    LOG_INFO("Slot size: %u, slot-aligned: %u, now: %u\n", TMAC_SLOT_SIZE, now - (now % TMAC_SLOT_SIZE), now);
+    return now - (now % TMAC_SLOT_SIZE) + TMAC_SLOT_SIZE * (1 << (TMAC_MIN_BE + num_rexmit - 1));
+  } else {
+    // this is the first transmit: try the next slot
+    return now - (now % TMAC_SLOT_SIZE) + TMAC_SLOT_SIZE;
+  }
+}
+
+static uint8_t packetbuf_save[PACKETBUF_SIZE];
+static uint32_t packetbuf_save_len = 0;
+
+// function declarations
+static void transmit(struct rtimer *rt, void *ptr);
 
 /*---------------------------------------------------------------------------*/
 static void
@@ -73,8 +96,7 @@ send_packet(mac_callback_t sent, void *ptr)
 {
   static uint8_t initialized = 0;
   static uint8_t seqno;
-  int hdr_len;
-  int ret;
+  static struct rtimer rt;
 
   if(!initialized) {
     initialized = 1;
@@ -92,73 +114,92 @@ send_packet(mac_callback_t sent, void *ptr)
 
   packetbuf_set_addr(PACKETBUF_ADDR_SENDER, &linkaddr_node_addr);
   packetbuf_set_attr(PACKETBUF_ATTR_MAC_ACK, 1);
+  packetbuf_set_attr(PACKETBUF_ATTR_NUM_REXMIT, 0); // used to count packet re-transmissions
 
-  /* TODO: Schedule transmission and end send_packet function */
-  
-  /* TODO: execute scheduled transmission in new transmit funtion with code below */
-
-  hdr_len = NETSTACK_FRAMER.create();
+  int hdr_len = NETSTACK_FRAMER.create();
   if(hdr_len < 0) {
     LOG_ERR("failed to create packet, seqno: %d\n", packetbuf_attr(PACKETBUF_ATTR_MAC_SEQNO));
-    ret = MAC_TX_ERR_FATAL;
+    // TODO: we should count these errors.. ret = MAC_TX_ERR_FATAL;
   } else {
-    int is_broadcast;
-    uint8_t dsn;
-    dsn = ((uint8_t *)packetbuf_hdrptr())[2] & 0xff;
+    packetbuf_save_len = packetbuf_copyto(packetbuf_save);
+    rtimer_set(&rt, get_next_slot(0), 0, transmit, sent);
+  }
 
-    NETSTACK_RADIO.prepare(packetbuf_hdrptr(), packetbuf_totlen());
+}
+  
+static void retransmit(struct rtimer *rt, mac_callback_t sent) {
+  uint8_t rexmit = packetbuf_attr(PACKETBUF_ATTR_NUM_REXMIT) + 1;
+  if (rexmit <= TMAC_MAX_BE - TMAC_MIN_BE) {
+    LOG_INFO("Rexmit no: %d\n", rexmit);
+    packetbuf_copyfrom(packetbuf_save, packetbuf_save_len);
+    packetbuf_set_attr(PACKETBUF_ATTR_NUM_REXMIT, rexmit);
+    rtimer_set(rt, get_next_slot(rexmit), 0, transmit, sent);
+  }
+}
 
-    is_broadcast = packetbuf_holds_broadcast();
+static void transmit(struct rtimer *rt, void *ptr) {
+  mac_callback_t sent = (mac_callback_t) ptr;
 
-    if(NETSTACK_RADIO.receiving_packet() ||
-       (!is_broadcast && NETSTACK_RADIO.pending_packet())) {
+  int ret;
+  packetbuf_copyfrom(packetbuf_save, packetbuf_save_len);
+  int is_broadcast;
+  uint8_t dsn;
+  dsn = ((uint8_t *)packetbuf_hdrptr())[2] & 0xff;
 
-      /* Currently receiving a packet over air or the radio has
-         already received a packet that needs to be read before
-         sending with auto ack. */
-      ret = MAC_TX_COLLISION;
-    } else {
-      switch(NETSTACK_RADIO.transmit(packetbuf_totlen())) {
-      case RADIO_TX_OK:
-        if(is_broadcast) {
-          ret = MAC_TX_OK;
-        } else {
-          /* Check for ack */
+  NETSTACK_RADIO.prepare(packetbuf_hdrptr(), packetbuf_totlen());
 
-          /* Wait for max TMAC_ACK_WAIT_TIME */
-          RTIMER_BUSYWAIT_UNTIL(NETSTACK_RADIO.pending_packet(), TMAC_ACK_WAIT_TIME);
-          ret = MAC_TX_NOACK;
-          if(NETSTACK_RADIO.receiving_packet() ||
-             NETSTACK_RADIO.pending_packet() ||
-             NETSTACK_RADIO.channel_clear() == 0) {
-            int len;
-            uint8_t ackbuf[TMAC_ACK_LEN];
+  is_broadcast = packetbuf_holds_broadcast();
 
-            /* Wait an additional TMAC_AFTER_ACK_DETECTED_WAIT_TIME to complete reception */
-            RTIMER_BUSYWAIT_UNTIL(NETSTACK_RADIO.pending_packet(), TMAC_AFTER_ACK_DETECTED_WAIT_TIME);
+  if(NETSTACK_RADIO.receiving_packet() ||
+     (!is_broadcast && NETSTACK_RADIO.pending_packet())) {
 
-            if(NETSTACK_RADIO.pending_packet()) {
-              len = NETSTACK_RADIO.read(ackbuf, TMAC_ACK_LEN);
-              if(len == TMAC_ACK_LEN && ackbuf[2] == dsn) {
-                /* Ack received */
-                ret = MAC_TX_OK;
-              } else {
-                /* Not an ack or ack not for us: collision */
-                ret = MAC_TX_COLLISION;
-                 //TODO: retry sending after backoff period
-              }
+    /* Currently receiving a packet over air or the radio has
+       already received a packet that needs to be read before
+       sending with auto ack. */
+    ret = MAC_TX_COLLISION;
+    LOG_INFO("Dropping packet\n");
+  } else {
+    switch(NETSTACK_RADIO.transmit(packetbuf_totlen())) {
+    case RADIO_TX_OK:
+      if(is_broadcast) {
+        ret = MAC_TX_OK;
+      } else {
+        /* Check for ack */
+
+        /* Wait for max TMAC_ACK_WAIT_TIME */
+        RTIMER_BUSYWAIT_UNTIL(NETSTACK_RADIO.pending_packet(), TMAC_ACK_WAIT_TIME);
+        ret = MAC_TX_NOACK;
+        if(NETSTACK_RADIO.receiving_packet() ||
+           NETSTACK_RADIO.pending_packet() ||
+           NETSTACK_RADIO.channel_clear() == 0) {
+          int len;
+          uint8_t ackbuf[TMAC_ACK_LEN];
+
+          /* Wait an additional TMAC_AFTER_ACK_DETECTED_WAIT_TIME to complete reception */
+          RTIMER_BUSYWAIT_UNTIL(NETSTACK_RADIO.pending_packet(), TMAC_AFTER_ACK_DETECTED_WAIT_TIME);
+
+          if(NETSTACK_RADIO.pending_packet()) {
+            len = NETSTACK_RADIO.read(ackbuf, TMAC_ACK_LEN);
+            if(len == TMAC_ACK_LEN && ackbuf[2] == dsn) {
+              /* Ack received */
+              ret = MAC_TX_OK;
+            } else {
+              /* Not an ack or ack not for us: collision */
+              ret = MAC_TX_COLLISION;
+              retransmit(rt, sent);
             }
           }
         }
-        break;
-      case RADIO_TX_COLLISION:
-        ret = MAC_TX_COLLISION;
-        //TODO: retry sending after backoff period
-        break;
-      default:
-        ret = MAC_TX_ERR;
-        break;
       }
+      break;
+    case RADIO_TX_COLLISION:
+      ret = MAC_TX_COLLISION;
+      retransmit(rt, sent);
+      break;
+    default:
+      ret = MAC_TX_ERR;
+      LOG_INFO("Radio error. Dropping packet\n");
+      break;
     }
   }
   mac_call_sent_callback(sent, ptr, ret, 1);
