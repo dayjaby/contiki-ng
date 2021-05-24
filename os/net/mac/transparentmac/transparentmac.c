@@ -77,7 +77,7 @@ get_next_slot(uint8_t num_rexmit) {
     // ...
     // rexmit #n: 2^(TMAC_MAX_BE) slots
     LOG_INFO("Slot size: %u, slot-aligned: %u, now: %u\n", TMAC_SLOT_SIZE, now - (now % TMAC_SLOT_SIZE), now);
-    return now - (now % TMAC_SLOT_SIZE) + TMAC_SLOT_SIZE * (1 << (TMAC_MIN_BE + num_rexmit - 1));
+    return now - (now % TMAC_SLOT_SIZE) + TMAC_SLOT_SIZE * (random_rand() % (1 << (TMAC_MIN_BE + num_rexmit - 1)));
   } else {
     // this is the first transmit: try the next slot
     return now - (now % TMAC_SLOT_SIZE) + TMAC_SLOT_SIZE;

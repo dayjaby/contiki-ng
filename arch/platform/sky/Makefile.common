@@ -15,6 +15,8 @@ CFLAGS += -D__MSP430F1611__=1 -e --vla -Ohz --multiplier=16s --core=430 --double
 CFLAGSNO = --dlib_config "$(IAR_PATH)/LIB/DLIB/dl430fn.h" $(CFLAGSWERROR)
 endif
 
+CFLAGS += -std=c99
+
 CONTIKI_TARGET_SOURCEFILES += $(ARCH) $(UIPDRIVERS)
 
 MCU=msp430f1611

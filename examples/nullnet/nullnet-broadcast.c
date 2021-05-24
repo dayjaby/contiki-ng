@@ -43,6 +43,8 @@
 #include "net/nullnet/nullnet.h"
 #include <string.h>
 #include <stdio.h> /* For printf() */
+#include "dev/leds.h"
+#include <random.h>
 
 /* Log configuration */
 #include "sys/log.h"
@@ -50,12 +52,32 @@
 #define LOG_LEVEL LOG_LEVEL_INFO
 
 /* Configuration */
-#define SEND_INTERVAL (8 * CLOCK_SECOND)
+#define SEND_INTERVAL (2 * CLOCK_SECOND)
+#define RESEND_COUNT 3
+#define RESEND_INTERVAL (CLOCK_SECOND / 20)
 
 #if MAC_CONF_WITH_TSCH
 #include "net/mac/tsch/tsch.h"
-static linkaddr_t coordinator_addr =  {{ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }};
 #endif /* MAC_CONF_WITH_TSCH */
+
+#define central_node 0x0D
+static linkaddr_t coordinator_addr =  {{ central_node, central_node, central_node, 0x00, central_node, 0x74, 0x12, 0x00 }};
+
+#define COMMAND_NONE 0
+#define COMMAND_TOGGLE_LED 1
+
+static leds_num_t led_list[] = {LEDS_RED, LEDS_BLUE, LEDS_YELLOW, LEDS_GREEN};
+static uint32_t led_list_count = sizeof(led_list)/sizeof(leds_num_t);
+
+leds_num_t get_random_led() {
+  return led_list[random_rand() % led_list_count];
+}
+
+typedef struct userdata {
+  uint8_t command;
+  leds_num_t led;
+  uint32_t seq;
+} userdata_t;
 
 /*---------------------------------------------------------------------------*/
 PROCESS(nullnet_example_process, "NullNet broadcast example");
@@ -65,20 +87,40 @@ AUTOSTART_PROCESSES(&nullnet_example_process);
 void input_callback(const void *data, uint16_t len,
   const linkaddr_t *src, const linkaddr_t *dest)
 {
-  if(len == sizeof(unsigned)) {
-    unsigned count;
-    memcpy(&count, data, sizeof(count));
-    LOG_INFO("Received %u from ", count);
-    LOG_INFO_LLADDR(src);
-    LOG_INFO_("\n");
+  if(linkaddr_cmp(&coordinator_addr, &linkaddr_node_addr)) {
+    // we are the central node. do nothing (yet)
+    return;
+  } else {
+    // remember the last received seq in order to prevent broadcasting old messages
+    // first message should have seq 1, so broadcasting is performed already
+    static uint32_t last_seq = 0;
+    if(len == sizeof(userdata_t)) {
+      userdata_t recv_data;
+      memcpy(&recv_data, data, sizeof(userdata_t));
+      switch(recv_data.command) {
+      case COMMAND_TOGGLE_LED:
+        LOG_INFO("Received seq %lu COMMAND_TOGGLE_LED command %u from ", recv_data.seq, recv_data.led);
+        if(recv_data.seq > last_seq) {
+          LOG_INFO_LLADDR(src);
+          LOG_INFO_("\n");
+          leds_toggle(recv_data.led);
+          memcpy(nullnet_buf, &recv_data, sizeof(userdata_t));
+          NETSTACK_NETWORK.output(NULL);
+        }
+        break;
+      };
+      last_seq = recv_data.seq;
+    }
   }
 }
+
 /*---------------------------------------------------------------------------*/
 PROCESS_THREAD(nullnet_example_process, ev, data)
 {
   static struct etimer periodic_timer;
-  static unsigned count = 0;
-
+  static userdata_t userdata;
+  static uint32_t seq = 0;
+  static uint32_t resend_count = 0;
   PROCESS_BEGIN();
 
 #if MAC_CONF_WITH_TSCH
@@ -86,22 +128,44 @@ PROCESS_THREAD(nullnet_example_process, ev, data)
 #endif /* MAC_CONF_WITH_TSCH */
 
   /* Initialize NullNet */
-  nullnet_buf = (uint8_t *)&count;
-  nullnet_len = sizeof(count);
+  nullnet_buf = (uint8_t *)&userdata;
+  nullnet_len = sizeof(userdata_t);
   nullnet_set_input_callback(input_callback);
 
-  etimer_set(&periodic_timer, SEND_INTERVAL);
+  if(linkaddr_cmp(&coordinator_addr, &linkaddr_node_addr)) {
+    userdata.command = COMMAND_TOGGLE_LED;
+    etimer_set(&periodic_timer, SEND_INTERVAL);
+  } else {
+    userdata.command = COMMAND_NONE;
+    etimer_set(&periodic_timer, RESEND_INTERVAL);
+  }
   while(1) {
     PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
-    LOG_INFO("Sending %u to ", count);
-    LOG_INFO_LLADDR(NULL);
-    LOG_INFO_("\n");
+    if(linkaddr_cmp(&coordinator_addr, &linkaddr_node_addr)) {
+      // done only once at startup
+      // userdata.command = COMMAND_TOGGLE_LED;
+      userdata.led = get_random_led();
+      seq++;
+      userdata.seq = seq;
+      LOG_INFO("Sending seq %lu COMMAND_TOGGLE_LED command %u to ", userdata.seq, userdata.led);
+      LOG_INFO_LLADDR(NULL);
+      LOG_INFO_("\n");
+      leds_toggle(userdata.led);
+      memcpy(nullnet_buf, &userdata, sizeof(userdata_t));
+      NETSTACK_NETWORK.output(NULL);
+    } else {
+      if(userdata.command != COMMAND_NONE) {
+        if(userdata.seq != seq) {
+          seq = userdata.seq;
+	  resend_count = RESEND_COUNT;
+	}
+	if(resend_count > 0) {
+          NETSTACK_NETWORK.output(NULL);
+          resend_count--;
+	}
+      }
+    }
     
-    memcpy(nullnet_buf, &count, sizeof(count));
-    nullnet_len = sizeof(count);
-
-    NETSTACK_NETWORK.output(NULL);
-    count++;
     etimer_reset(&periodic_timer);
   }
 
