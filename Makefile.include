@@ -59,6 +59,7 @@ CFLAGS += -DCONTIKI=1 -DCONTIKI_TARGET_$(TARGET_UPPERCASE)=1
 CFLAGS += -DCONTIKI_TARGET_STRING=\"$(TARGET)\"
 
 CFLAGS += -Wno-unused-variable
+CFLAGS += -lm
 
 LDFLAGS_WERROR ?= -Wl,--fatal-warnings
 

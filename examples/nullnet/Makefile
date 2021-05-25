@@ -1,4 +1,4 @@
-CONTIKI_PROJECT = nullnet-unicast nullnet-broadcast
+CONTIKI_PROJECT = nullnet-unicast nullnet-broadcast nullnet-propagation
 all: $(CONTIKI_PROJECT)
 
 CONTIKI = ../..
