@@ -145,12 +145,12 @@ void push_back(userdata_t* data) {
   }
   memcpy(&queue[back%QUEUE_SIZE], data, sizeof(userdata_t));
   userdata_t* log_data = &queue[back%QUEUE_SIZE];
-  LOG_INFO("Queue round %lu with measurement %u from node %u\n", log_data->round, log_data->measurement, log_data->node_id);
+  // LOG_INFO("Queue round %lu with measurement %u from node %u\n", log_data->round, log_data->measurement, log_data->node_id);
 }
 
 void pop_front(userdata_t* data) {
   userdata_t* log_data = &queue[front%QUEUE_SIZE];
-  LOG_INFO("Dequeue round %lu with measurement %u from node %u\n", log_data->round, log_data->measurement, log_data->node_id);
+  // LOG_INFO("Dequeue round %lu with measurement %u from node %u\n", log_data->round, log_data->measurement, log_data->node_id);
   memcpy(data, &queue[front%QUEUE_SIZE], sizeof(userdata_t));
   if(front==back) {
     front = -1;
@@ -187,7 +187,7 @@ void input_callback(const void *data, uint16_t len,
     } else if(len == sizeof(beacondata_t)) {
       beacondata_t recv_beacondata;
       memcpy(&recv_beacondata, data, sizeof(beacondata_t));
-      LOG_INFO("Updating distance to centre for node %u: %u\n", sender-1, (uint16_t)recv_beacondata.centre_distance);
+      // LOG_INFO("Updating distance to centre for node %u: %u\n", sender-1, (uint16_t)recv_beacondata.centre_distance);
       centre_distances[sender-1] = recv_beacondata.centre_distance;
       received_messages[sender-1]++; // we count only beacons!
     }
@@ -201,11 +201,11 @@ void send_to_parent_node() {
   int i=0;
   for(i=0; i<NODES_COUNT; ++i) {
     if(i == (node_nr-1)) continue;
-    LOG_INFO("Msgs: %lu, Distance I: %i, Distance N: %i\n", received_messages[i], centre_distances[i], get_distance_centre(node_nr));
+    // LOG_INFO("Msgs: %lu, Distance I: %i, Distance N: %i\n", received_messages[i], centre_distances[i], get_distance_centre(node_nr));
     // encourage sending to a node that's closer to the centre and from which we received a lot of messages
     int32_t heuristic = (get_distance_centre(node_nr) - centre_distances[i]) * received_messages[i];
     // if(i == (CENTRAL_NODE-1)) heuristic *= 2;
-    LOG_INFO("Heuristic for node %u: %u\n", (uint8_t)i, (uint16_t)heuristic);
+    // LOG_INFO("Heuristic for node %u: %u\n", (uint8_t)i, (uint16_t)heuristic);
     if(heuristic > best_parent_heuristic) {
       best_parent_heuristic = heuristic;
       best_parent_node = i;
@@ -213,7 +213,7 @@ void send_to_parent_node() {
   }
   if(best_parent_node>=0) {
     best_parent_node++; // node nrs start with 1
-    LOG_INFO("Found parent %u\n", (uint8_t)best_parent_node);
+    // LOG_INFO("Found parent %u\n", (uint8_t)best_parent_node);
     linkaddr_t parent;
     get_node_addr((uint8_t)best_parent_node, &parent);
     NETSTACK_NETWORK.output(&parent);
